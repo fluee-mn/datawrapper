@@ -1,0 +1,67 @@
+import csv
+import os
+import requests
+from bs4 import BeautifulSoup
+from flask import Flask, send_file, jsonify
+from flask_cors import CORS
+from apscheduler.schedulers.background import BackgroundScheduler
+
+app = Flask(__name__)
+
+# Allow CORS requests globally (required by Datawrapper)
+CORS(app, supports_credentials=True, origins="*")
+
+CSV_FILE = os.path.join(os.path.dirname(__file__), 'data.csv')
+
+def scrape_and_save_data():
+    """Scrapes data and writes it directly to the CSV file."""
+    try:
+        print("Scraping target website...")
+        url = "https://apps.deed.state.mn.us/lmi/ces/ResultDetails.aspx?ind=70720000&title=Accommodation%20and%20Food%20Services"
+        response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        with open(CSV_FILE, mode='w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            # Header
+            writer.writerow(['Title', 'Link'])
+
+            # Extract elements
+            for link in soup.find_all('a'):
+                title = link.get_text(strip=True)
+                href = link.get('href')
+                if title and href:
+                    writer.writerow([title, href])
+
+        print("Data successfully scraped and saved to CSV.")
+    except Exception as e:
+        print(f"Error during scraping: {e}")
+
+# Run initial scrape at boot
+scrape_and_save_data()
+
+# Schedule periodic updates (every 60 minutes)
+scheduler = BackgroundScheduler()
+scheduler.add_job(func=scrape_and_save_data, trigger="interval", minutes=60)
+scheduler.start()
+
+@app.route('/data.csv', methods=['GET'])
+def get_csv():
+    """Serves the CSV file with proper headers for Datawrapper."""
+    if not os.path.exists(CSV_FILE):
+        return "CSV file not found", 404
+
+    return send_file(
+        CSV_FILE,
+        mimetype='text/csv',
+        as_attachment=False,
+        download_name='data.csv'
+    )
+
+@app.route('/scrape-now', methods=['GET'])
+def force_scrape():
+    scrape_and_save_data()
+    return jsonify({"status": "Scrape complete"})
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000, debug=True)
